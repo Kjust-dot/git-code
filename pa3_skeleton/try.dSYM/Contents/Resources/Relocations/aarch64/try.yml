@@ -1,0 +1,5 @@
+---
+triple:          'arm64-apple-darwin'
+binary-path:     '/Users/mac/Desktop/comp/c++/comp2011/pa3_skeleton/try'
+relocations:     []
+...
