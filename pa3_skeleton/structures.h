@@ -53,6 +53,9 @@ struct PullRequest {
   Branch *fromBranch;
   Branch *toBranch;
   PullRequestStatus status;
+  Repository *fromRepo;
+  char fromBranchFQN[MAX_USER_NAME_LEN + MAX_REPO_NAME_LEN + MAX_BRANCH_NAME_LEN];
+  char toBranchName[MAX_BRANCH_NAME_LEN];
 };
 
 struct Repository {

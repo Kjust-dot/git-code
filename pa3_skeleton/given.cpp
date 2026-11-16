@@ -77,7 +77,11 @@ void print(const PullRequest &pr, bool details) {
     cout << endl;
 
     cout << "From Branch: ";
-    print(*pr.fromBranch);
+    if (pr.fromBranch) {
+      print(*pr.fromBranch);
+    } else {
+      cout << pr.fromBranchFQN;
+    }
     cout << endl;
 
     cout << "To Branch: ";
@@ -85,7 +89,7 @@ void print(const PullRequest &pr, bool details) {
       print(*pr.toBranch);
     else {
       print(*pr.repo);
-      cout << ":main";
+      cout << ':' << pr.toBranchName;
     }
     cout << endl;
 

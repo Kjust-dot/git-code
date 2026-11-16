@@ -5,8 +5,81 @@
 #include "pa3_task.h"
 #include "structures.h"
 #include <iostream>
-#include <cstdio>
+#include <string>
+#include <vector>
 using namespace std;
+
+namespace {
+
+Commit *copy_history(const Commit *source) {
+  Commit *head = nullptr;
+  Commit *previous = nullptr;
+  Commit **next = &head;
+  for (; source; source = source->next) {
+    Commit *copy = new Commit(*source);
+    copy->prev = previous;
+    copy->next = nullptr;
+    *next = copy;
+    next = &copy->next;
+    previous = copy;
+  }
+  return head;
+}
+
+void delete_history(Commit *head) {
+  while (head) {
+    Commit *next = head->next;
+    delete head;
+    head = next;
+  }
+}
+
+Commit *prepend_commit(Commit *head, const User *author, const char *message,
+                       time_t timestamp) {
+  Commit *commit = new Commit;
+  commit->author = author;
+  strncpy(commit->message, message, sizeof(commit->message) - 1);
+  commit->message[sizeof(commit->message) - 1] = '\0';
+  commit->timestamp = timestamp;
+  commit->next = head;
+  commit->prev = nullptr;
+
+  initialize(commit->hash);
+  input(commit->hash, author->name, strlen(author->name));
+  input(commit->hash, commit->message, strlen(commit->message));
+  input(commit->hash, timestamp);
+  if (head) {
+    input(commit->hash, head->author->name, strlen(head->author->name));
+    input(commit->hash, head->message, strlen(head->message));
+    input(commit->hash, head->timestamp);
+    head->prev = commit;
+  }
+  digest(commit->hash);
+  return commit;
+}
+
+Repository *find_task_repository(const RepositoryManagement &management,
+                                 const string &fqn) {
+  for (int i = 0; i < management.numRepos; ++i) {
+    Repository *repo = management.repos[i];
+    if (fqn == string(repo->owner->name) + '/' + repo->name)
+      return repo;
+  }
+  cout << "Repository " << fqn << " does not exist." << endl;
+  return nullptr;
+}
+
+Branch *find_task_branch(Repository *repo, const string &name) {
+  for (int i = 0; i < repo->numBranches; ++i) {
+    if (name == repo->branches[i]->name)
+      return repo->branches[i];
+  }
+  cout << "Branch " << repo->owner->name << '/' << repo->name << ':'
+       << name << " does not exist." << endl;
+  return nullptr;
+}
+
+} // namespace
 
 /**
  * Task 1 - Register New User
@@ -24,7 +97,7 @@ const User *register_new_user(UserManagement &userManagement,
                               const char *username) {
   // TODO: Task 1
   if (strlen(username)>MAX_USER_NAME_LEN-1){
-    cout<< "Username length exceeded "<< strlen(username)-MAX_USER_NAME_LEN+2 <<" characters."<<endl;
+    cout<< "Username length exceeded "<< strlen(username)-MAX_USER_NAME_LEN+1 <<" characters."<<endl;
     return nullptr;
   }
 User *cur =userManagement.head;
@@ -79,7 +152,7 @@ int create_repository(RepositoryManagement &repoManagement, User *owner,
                       const char *repoName, const time_t creationTimestamp) {
   // TODO: Task 2
   if (strlen(repoName)>=MAX_REPO_NAME_LEN){
-    cout<<"Repository name length exceeded "<< strlen(repoName)-MAX_REPO_NAME_LEN+5<<" characters."<<endl;
+    cout<<"Repository name length exceeded "<< strlen(repoName)-MAX_REPO_NAME_LEN+1<<" characters."<<endl;
     return -1;
   }
   for (int i = 0; i < owner->numRepos; ++i) {
@@ -97,41 +170,30 @@ int create_repository(RepositoryManagement &repoManagement, User *owner,
   newrepo->prs=nullptr;
   newrepo->forks=nullptr;
   newrepo->branches=nullptr;
-  Commit *Initial_commit=new Commit;
-  Initial_commit->author=owner;
-  strcpy(Initial_commit->message, "Initial commit.");
-  Initial_commit->timestamp=creationTimestamp;
-  initialize(Initial_commit->hash);
-  input(Initial_commit->hash, owner->name,strlen(owner->name));
-  input(Initial_commit->hash,Initial_commit->message,strlen(Initial_commit->message));
-  input(Initial_commit->hash,Initial_commit->timestamp);
-  digest(Initial_commit->hash);
-  Initial_commit->next=nullptr;
-  Initial_commit->prev=nullptr;
-  newrepo->commits=Initial_commit;
-  Repository **newownrepo = new Repository*[owner->numRepos+1];
-  for (int i=0;i< owner->numRepos;i++){
-    newownrepo[i]=owner->repos[i];
-  }
-  newownrepo[owner->numRepos]=newrepo;
+  newrepo->commits = prepend_commit(nullptr, owner, "Initial commit.",
+                                    creationTimestamp);
+  int ownerIndex = 0;
+  while (ownerIndex < owner->numRepos &&
+         strcmp(owner->repos[ownerIndex]->name, repoName) < 0)
+    ++ownerIndex;
+  Repository **newOwnerRepos = new Repository*[owner->numRepos + 1];
+  for (int i = 0; i < ownerIndex; ++i)
+    newOwnerRepos[i] = owner->repos[i];
+  newOwnerRepos[ownerIndex] = newrepo;
+  for (int i = ownerIndex; i < owner->numRepos; ++i)
+    newOwnerRepos[i + 1] = owner->repos[i];
   delete[] owner->repos;
-  owner->repos=newownrepo;
-  owner->numRepos++;
-  Repository **cur=repoManagement.repos;
-  Repository **end=repoManagement.repos+repoManagement.numRepos;
-  int count=0;
-  while(cur<end){
-    Repository *now=*cur; 
-    if (strcmp(now->owner->name,newrepo->owner->name)>0){
+  owner->repos = newOwnerRepos;
+  ++owner->numRepos;
+
+  int count = 0;
+  while (count < repoManagement.numRepos) {
+    Repository *current = repoManagement.repos[count];
+    int ownerOrder = strcmp(current->owner->name, owner->name);
+    if (ownerOrder > 0 ||
+        (ownerOrder == 0 && strcmp(current->name, repoName) > 0))
       break;
-      }
-      else if (strcmp(now->owner->name,newrepo->owner->name)==0){
-        if (strcmp(now->name,newrepo->name)>0){
-          break;
-        }
-      }
-    cur++;
-    count++;
+    ++count;
   }
   Repository **newallrepo=new Repository*[repoManagement.numRepos+1];
   for (int i=0; i<count;i++){
@@ -144,8 +206,7 @@ int create_repository(RepositoryManagement &repoManagement, User *owner,
   delete[] repoManagement.repos;
   repoManagement.repos=newallrepo;
   repoManagement.numRepos++;
-  return count;
-  /*return owner->numRepos-1*/ 
+  return ownerIndex;
 
 }
 
@@ -171,42 +232,27 @@ bool create_branch(RepositoryManagement &repoManagement, char *repoFQN,
                    const char *branchName, const User *creator,
                    const Commit *commit) {
   // TODO: Task 3
-  Repository *targetrepo=nullptr;
-  if (strlen(branchName)>MAX_BRANCH_NAME_LEN){
-    cout<<"Branch name length exceeded "<<strlen(branchName)-MAX_BRANCH_NAME_LEN+1<<" characters."<<endl;
+  if (strlen(branchName) >= MAX_BRANCH_NAME_LEN) {
+    cout << "Branch name length exceeded "
+         << strlen(branchName) - MAX_BRANCH_NAME_LEN + 1 << " characters." << endl;
     return false;
   }
-  for (int i=0; i<repoManagement.numRepos;i++){
-    Repository *currepo=repoManagement.repos[i];
-    char tempFQN[MAX_USER_NAME_LEN + MAX_REPO_NAME_LEN + 2];
-    strcpy(tempFQN, currepo->owner->name);
-    strcat(tempFQN, "/");
-    strcat(tempFQN, currepo->name);
-    if (strcmp(tempFQN,repoFQN)==0){
-      targetrepo=currepo;
-      break;
-    }
-  }
-  if (targetrepo==nullptr){
-    cout<<"Repository "<<repoFQN<<" does not exist."<<endl;
+  Repository *targetrepo = find_task_repository(repoManagement, repoFQN);
+  if (!targetrepo)
+    return false;
+
+  bool exists = strcmp(branchName, "main") == 0;
+  for (int i = 0; i < targetrepo->numBranches && !exists; ++i)
+    exists = strcmp(targetrepo->branches[i]->name, branchName) == 0;
+  if (exists) {
+    cout << "Branch " << repoFQN << ':' << branchName << " already exists."
+         << endl;
     return false;
   }
-  for (int i=0;i<targetrepo->numBranches;i++){
-    if (strcmp(targetrepo->branches[i]->name,branchName)==0){
-      cout<<"Branch "<<repoFQN<<':'<<branchName<<" already exists."<<endl;
-      return false;
-    }
-  }
-  const Commit *sourcecommit=commit;
-  if (sourcecommit==nullptr){
-    sourcecommit=targetrepo->commits;
-  }
-  Commit *newcommit=new Commit;
-  *newcommit=*sourcecommit;
-  Branch *newbranch=new Branch;
-  newbranch->creator=const_cast<User*>(creator);
-  newbranch->repo=targetrepo;
-  newbranch->head=newcommit;
+  Branch *newbranch = new Branch;
+  newbranch->creator = creator;
+  newbranch->repo = targetrepo;
+  newbranch->head = copy_history(commit ? commit : targetrepo->commits);
   strcpy(newbranch->name, branchName);
   Branch **newbrancharray = new Branch*[targetrepo->numBranches+1];
   int insert=0;
@@ -250,86 +296,27 @@ bool create_branch(RepositoryManagement &repoManagement, char *repoFQN,
 void add_commit(RepositoryManagement &repoManagement, const User *author,
                 char *repoFQN, const char *branch, const char *commitMessage,
                 time_t timestamp) {
-  // TODO: Task 4
-  char finalcommit[MAX_COMMIT_MSG_LEN];
-  if (strlen(commitMessage)>MAX_COMMIT_MSG_LEN-1  ){
-    cout<<"Warning: commit message is longer than "<<MAX_COMMIT_MSG_LEN - 1<<" characters and will be truncated."<<endl;
-    for(int i=0; i<MAX_COMMIT_MSG_LEN-1;i++){
-      finalcommit[i]=commitMessage[i];
-    }
-    finalcommit[MAX_COMMIT_MSG_LEN-1]='\0';  
-  }
-  else {
-    strcpy(finalcommit,commitMessage);
-  }
-  Repository *targetrepo = nullptr;
-  for (int i=0; i<repoManagement.numRepos;i++){
-    Repository *currepo=repoManagement.repos[i];
-    char tempFQN[MAX_USER_NAME_LEN + MAX_REPO_NAME_LEN + 2];
-    strcpy(tempFQN, currepo->owner->name);
-    strcat(tempFQN, "/");
-    strcat(tempFQN, currepo->name);
-    if (strcmp(tempFQN,repoFQN)==0){
-      targetrepo=currepo;
-      break;
-    }
-  }
-  if (targetrepo==nullptr){
-    cout<<"Repository "<<repoFQN<<" does not exist."<<endl;
+  if (timestamp == -1)
     return;
+  if (strlen(commitMessage) >= MAX_COMMIT_MSG_LEN) {
+    cout << "Warning: commit message is longer than " << MAX_COMMIT_MSG_LEN - 1
+         << " characters and will be truncated." << endl;
   }
-  Branch *targetbranch=nullptr;
-  bool found=false;
-  if (branch != nullptr){
-    for (int i=0; i<targetrepo->numBranches;i++){
-      if (strcmp(branch,targetrepo->branches[i]->name)==0){
-        targetbranch=targetrepo->branches[i];
-        found=true;
-        break;
-      }
-    }
-  }
-  if (branch != nullptr && found == false){
-    cout<<"Branch "<<repoFQN<<':'<<branch<<" does not exist."<<endl;
-    return;
-  }
-  Commit *precommit= nullptr;
-  if (branch==nullptr){
-    precommit=targetrepo->commits;
-  }
-  else{
-    precommit=targetbranch->head;
-  }
-  Commit *newcommit=new Commit;
-  newcommit->author = const_cast<User*>(author);
-  strcpy(newcommit->message, finalcommit);
-  newcommit->timestamp=timestamp;
-  initialize(newcommit->hash);
-  input(newcommit->hash,newcommit->author->name,strlen(newcommit->author->name));
-  input(newcommit->hash,newcommit->message,strlen(newcommit->message));
-  input(newcommit->hash,newcommit->timestamp);
-  if (precommit!=nullptr){
-  input(newcommit->hash,precommit->author->name,strlen(precommit->author->name));
-  input(newcommit->hash,precommit->message,strlen(precommit->message));
-  input(newcommit->hash,precommit->timestamp);
-  }
-  digest(newcommit->hash);
-  if (precommit != nullptr) {
-     precommit->prev = newcommit;
-    }
-  newcommit->prev=nullptr;
-  newcommit->next=precommit;
-  if (branch!=nullptr){
-    targetbranch->head=newcommit;
-  }
-  else{
-    targetrepo->commits=newcommit;
-  }
-  cout<<"Pushing commit ";
-  print_sha(newcommit->hash);
-  const char *branchOutputName = (branch != nullptr) ? branch : "main";
-  cout<<" to branch "<<repoFQN<<':'<<branchOutputName<<'.'<<endl;
 
+  Repository *repo = find_task_repository(repoManagement, repoFQN);
+  if (!repo)
+    return;
+  const bool isMain = !branch || strcmp(branch, "main") == 0;
+  Branch *target = isMain ? nullptr : find_task_branch(repo, branch);
+  if (!isMain && !target)
+    return;
+
+  Commit *&head = target ? target->head : repo->commits;
+  head = prepend_commit(head, author, commitMessage, timestamp);
+  cout << "Pushing commit ";
+  print_sha(head->hash);
+  cout << " to branch " << repoFQN << ':' << (isMain ? "main" : branch)
+       << '.' << endl;
 }
 
 /**
@@ -472,113 +459,54 @@ bool transfer_ownership(UserManagement &userManagement,
 bool create_pull_request(const RepositoryManagement &repoManagement,
                          const char *title, const User *author,
                          char *fromBranchFQN, char *toBranchFQN) {
-  // TODO: Task 6
-  if (strlen(title)>MAX_PR_TITLE_LEN-1){
-    cout<<"Pull request title length exceeded "<<strlen(title)-MAX_PR_TITLE_LEN+28<<" characters."<<endl;
+  if (strlen(title) >= MAX_PR_TITLE_LEN) {
+    cout << "Pull request title length exceeded "
+         << strlen(title) - MAX_PR_TITLE_LEN + 1 << " characters." << endl;
     return false;
   }
-  char fromRepoFQN[256];
-  char fromBranchName[256];
-  int colonpos1=-1;
-  for (int i=0;i<strlen(fromBranchFQN)-1;i++){
-    if (fromBranchFQN[i] == ':') {
-        colonpos1 = i;
-        break;
-    }
-  }
-  if (colonpos1==-1){
+  const string source(fromBranchFQN);
+  const string target(toBranchFQN);
+  const auto sourceColon = source.find(':');
+  const auto targetColon = target.find(':');
+  if (sourceColon == string::npos || targetColon == string::npos ||
+      sourceColon == 0 || targetColon == 0 || sourceColon + 1 == source.size() ||
+      targetColon + 1 == target.size())
     return false;
-  }
-  for (int i=0;i<colonpos1;i++){
-    fromRepoFQN[i]=fromBranchFQN[i];
-  }
-  fromRepoFQN[colonpos1] = '\0';
-  int j=0;
-  for (int i=colonpos1+1 ;i<strlen(fromBranchFQN);i++){
-    fromBranchName[j]=fromBranchFQN[i];
-    j++;
-  }
-  fromBranchName[j] = '\0';
-  char toRepoFQN[256];
-  char toBranchName[256];
-  int colonpos2=-1;
-  for (int i=0;i<strlen(toBranchFQN)-1;i++){
-    if (toBranchFQN[i] == ':') {
-        colonpos2 = i;
-        break;
-    }
-  }
-  if (colonpos2==-1){
-    return false;
-  }
-  for (int i=0;i<colonpos2;i++){
-    toRepoFQN[i]=toBranchFQN[i];
-  }
-  toRepoFQN[colonpos2] = '\0';
-  int m=0;
-  for (int i=colonpos2+1;i<strlen(toBranchFQN);i++){
-    toBranchName[m]=toBranchFQN[i];
-    m++;
-  }
-  toBranchName[m] = '\0';
-  Repository *fromRepo = nullptr;
-  Repository *toRepo = nullptr;
 
+  const string fromRepoFQN = source.substr(0, sourceColon);
+  const string toRepoFQN = target.substr(0, targetColon);
+  Repository *fromRepo = find_task_repository(repoManagement, fromRepoFQN);
+  if (!fromRepo)
+    return false;
+  Repository *toRepo = find_task_repository(repoManagement, toRepoFQN);
+  if (!toRepo)
+    return false;
 
-  for (int i=0;i<repoManagement.numRepos;i++){
-    Repository *cur=repoManagement.repos[i];
-    char tempfqn[256];
-    strcpy(tempfqn, cur->owner->name);
-    strcat(tempfqn, "/");
-    strcat(tempfqn, cur->name);
-    if (strcmp(tempfqn,fromRepoFQN)==0){
-      fromRepo=cur;
-    }
-    if (strcmp(tempfqn,toRepoFQN)==0){
-      toRepo=cur;
-    }
-  }
-  if (fromRepo==nullptr){
-    cout<<"Repository "<<fromRepoFQN<<" does not exist."<<endl;
+  const string fromBranchName = source.substr(sourceColon + 1);
+  const string toBranchName = target.substr(targetColon + 1);
+  const bool fromMain = fromBranchName == "main";
+  const bool toMain = toBranchName == "main";
+  Branch *fromBranch = fromMain ? nullptr : find_task_branch(fromRepo, fromBranchName);
+  if (!fromMain && !fromBranch)
+    return false;
+  Branch *toBranch = toMain ? nullptr : find_task_branch(toRepo, toBranchName);
+  if (!toMain && !toBranch)
+    return false;
+  if (fromRepo == toRepo && fromBranch == toBranch) {
+    cout << "Source and target branches must be different." << endl;
     return false;
   }
-  if (toRepo==nullptr){
-    cout<<"Repository "<<toRepoFQN<<" does not exist."<<endl;
-    return false;
-  }
-  Branch *fromBranchprt=nullptr;
-  Branch *toBranchprt=nullptr;
-  if (strcmp(fromBranchName, "main") != 0){
-    for (int i=0;i<fromRepo->numBranches;i++){
-      if (strcmp(fromRepo->branches[i]->name,fromBranchName)==0){
-        fromBranchprt=fromRepo->branches[i];
-        break;
-      }
-    }
-    if (fromBranchprt==nullptr){
-      cout<<"Branch "<<fromBranchFQN<<" does not exist."<<endl;
-      return false;
-    }
-  }
-  if (strcmp(toBranchName, "main") != 0){
-    for (int i=0;i<toRepo->numBranches;i++){
-    if (strcmp(toRepo->branches[i]->name,toBranchName)==0){
-        toBranchprt=toRepo->branches[i];
-        break;
-      }
-    }
-    if (toBranchprt==nullptr){
-      cout<<"Branch "<<toBranchFQN<<" does not exist."<<endl;
-      return false;
-    }
-  }
+
   PullRequest *newrequest=new PullRequest;
   newrequest->author = const_cast<User*>(author);
   newrequest->id=toRepo->numPrs+1;
   strcpy(newrequest->title,title);
   newrequest->repo=toRepo;
-  newrequest->fromBranch=fromBranchprt;
-  newrequest->toBranch=toBranchprt;
+  newrequest->fromBranch = fromBranch;
+  newrequest->toBranch = toBranch;
+  newrequest->fromRepo = fromRepo;
+  strcpy(newrequest->fromBranchFQN, fromBranchFQN);
+  strcpy(newrequest->toBranchName, toBranchName.c_str());
   newrequest->status=OPEN;
   PullRequest **newPRarray= new PullRequest*[toRepo->numPrs+1];
   for (int i=0;i<toRepo->numPrs;i++){
@@ -646,76 +574,15 @@ bool fork_repository(UserManagement &userManagement,
   newrepo->prs=nullptr;
   newrepo->numForks=0;
   newrepo->forks=nullptr;
-  Commit *oldcur=baseRepo->commits;
-  Commit *newhead=nullptr;
-  Commit *newtail=nullptr;
-  while (oldcur!=nullptr){
-    Commit *newCommit = new Commit;
-    *newCommit=*oldcur;
-    newCommit->next=nullptr;
-    newCommit->prev=newtail;
-    if (newtail==nullptr){
-      newhead=newCommit;
-    }
-    else{
-      newtail->next=newCommit;
-    }
-    newtail=newCommit;
-    oldcur=oldcur->next;
-  }
-  newrepo->commits = newhead;
+  newrepo->commits = copy_history(baseRepo->commits);
   newrepo->numBranches = baseRepo->numBranches;
-  if (newrepo->numBranches>0){
-    newrepo->branches = new Branch*[newrepo->numBranches];
-    for (int i=0; i<newrepo->numBranches;i++){
-      Branch *oldBranch = baseRepo->branches[i];
-      Branch *newBranch = new Branch;
-      strcpy(newBranch->name,oldBranch->name);
-      newBranch->creator=oldBranch->creator;
-      newBranch->repo=newrepo;
-      Commit *oldBranchCurr = oldBranch->head;
-      Commit *newBranchHead = nullptr;
-      Commit *newBranchTail = nullptr;
-
-      while (oldBranchCurr != nullptr) {
-        Commit *searchNew = newrepo->commits;
-        bool foundInMain = false;
-          
-        while (searchNew != nullptr) {
-          if (searchNew->timestamp == oldBranchCurr->timestamp &&
-            strcmp(searchNew->message, oldBranchCurr->message) == 0) {
-            foundInMain = true;
-            break;
-          }
-            searchNew = searchNew->next;
-        }
-        if (foundInMain) {
-          if (newBranchTail != nullptr) {
-            newBranchTail->next = searchNew;
-          } else {
-            newBranchHead = searchNew; 
-            }
-            break; 
-        } else {
-          Commit *newCommit = new Commit;
-          *newCommit = *oldBranchCurr;
-          newCommit->next = nullptr;
-          newCommit->prev = newBranchTail;
-          if (newBranchTail != nullptr) {
-            newBranchTail->next = newCommit;
-          } else {
-            newBranchHead = newCommit;
-            }
-          newBranchTail = newCommit;
-          oldBranchCurr = oldBranchCurr->next;
-        }
-      }
-      newBranch->head = newBranchHead;
-      newrepo->branches[i]=newBranch;
-    }
-  }
-  else{
-    newrepo->branches=nullptr;
+  newrepo->branches = newrepo->numBranches ? new Branch*[newrepo->numBranches]
+                                           : nullptr;
+  for (int i = 0; i < newrepo->numBranches; ++i) {
+    Branch *branch = new Branch(*baseRepo->branches[i]);
+    branch->repo = newrepo;
+    branch->head = copy_history(branch->head);
+    newrepo->branches[i] = branch;
   }
 
   Repository **newOwnerRepos = new Repository*[newOwner->numRepos + 1];
@@ -766,688 +633,223 @@ bool fork_repository(UserManagement &userManagement,
     return true;
 }
 
-/**
- * Task 8.1 - Merge Pull Request (Squash Merge)
- *
- * The `merge_pull_request_squashmerge` function merges the specified
- * pull request in a repsitory using the squash merge strategy
- * (combines all commits in the pull request into one and add it to the target
- * branch).
- *
- * @param repoManagement: reference to the `RepositoryManagement` structure
- *                        containing the dynamic array of pointers to
- *                        repositories.
- * @param repoFQN: the name of the repository to merge a pull request for.
- * @param prNumber: the number of the pull request to merge.
- * @param timestamp: the timestamp when this pull request was merged.
- */
+namespace {
+
+void close_if_open(PullRequest &pr) {
+  if (pr.status == OPEN)
+    pr.status = CLOSED;
+}
+
+void remove_source_branch(RepositoryManagement &management, Branch *branch) {
+  if (!branch)
+    return;
+
+  Repository &repo = *branch->repo;
+  for (int i = 0; i < management.numRepos; ++i) {
+    Repository &current = *management.repos[i];
+    for (int j = 0; j < current.numPrs; ++j) {
+      PullRequest &pr = *current.prs[j];
+      if (pr.fromBranch == branch) {
+        pr.fromBranch = nullptr;
+        close_if_open(pr);
+      }
+      if (pr.toBranch == branch) {
+        pr.toBranch = nullptr;
+        close_if_open(pr);
+      }
+    }
+  }
+
+  int index = 0;
+  while (repo.branches[index] != branch)
+    ++index;
+  for (int i = index + 1; i < repo.numBranches; ++i)
+    repo.branches[i - 1] = repo.branches[i];
+  --repo.numBranches;
+  if (repo.numBranches == 0) {
+    delete[] repo.branches;
+    repo.branches = nullptr;
+  }
+  delete_history(branch->head);
+  delete branch;
+}
+
+vector<const Commit *> commits_to_replay(const Commit *source,
+                                         const Commit *target) {
+  vector<const Commit *> commits;
+  for (; source; source = source->next) {
+    const Commit *match = target;
+    while (match && !commits_equal(*match, *source))
+      match = match->next;
+    if (match)
+      break;
+    commits.push_back(source);
+  }
+  return commits;
+}
+
+void merge_task_pull_request(RepositoryManagement &management, char *repoFQN,
+                             int prNumber, time_t timestamp,
+                             PullRequestMergeStrategy strategy) {
+  if (timestamp == -1)
+    return;
+  Repository *repo = find_task_repository(management, repoFQN);
+  if (!repo)
+    return;
+  if (prNumber <= 0 || prNumber > repo->numPrs) {
+    cout << "Invalid pull request number for repository " << repoFQN
+         << ": out of range." << endl;
+    return;
+  }
+  PullRequest &pr = *repo->prs[prNumber - 1];
+  if (pr.status != OPEN) {
+    cout << "Pull request #" << prNumber << " in " << repoFQN
+         << " is not open." << endl;
+    return;
+  }
+
+  Commit *&target = pr.toBranch ? pr.toBranch->head : repo->commits;
+  const char *method;
+  if (strategy == SQUASH_AND_MERGE) {
+    const string message = string(pr.title) + " (#" + to_string(prNumber) + ')';
+    target = prepend_commit(target, pr.author, message.c_str(), timestamp);
+    method = "squash merge";
+  } else {
+    const Commit *source = pr.fromBranch ? pr.fromBranch->head : pr.fromRepo->commits;
+    const auto commits = commits_to_replay(source, target);
+    for (auto it = commits.rbegin(); it != commits.rend(); ++it) {
+      const Commit &original = **it;
+      if (strategy == REBASE_MERGE) {
+        target = prepend_commit(target, original.author, original.message, timestamp);
+      } else {
+        Commit *copy = new Commit(original);
+        copy->next = target;
+        copy->prev = nullptr;
+        if (target)
+          target->prev = copy;
+        target = copy;
+      }
+    }
+
+    method = "rebase merge";
+    if (strategy == MERGE_COMMIT) {
+      const string sourceFQN = string(pr.fromRepo->owner->name) + '/' +
+                               pr.fromRepo->name + ':' +
+                               (pr.fromBranch ? pr.fromBranch->name : "main");
+      const string message = "Merge pull request #" + to_string(prNumber) +
+                             " from branch " + sourceFQN;
+      target = prepend_commit(target, pr.author, message.c_str(), timestamp);
+      method = "a merge commit";
+    }
+  }
+  pr.status = MERGED;
+  remove_source_branch(management, pr.fromBranch);
+  cout << "Pull request #" << prNumber << " in " << repoFQN
+       << " has been merged using " << method << '.' << endl;
+}
+
+void replace_author(Commit *head, const User *user) {
+  for (Commit *commit = head; commit; commit = commit->next) {
+    if (commit->author == user)
+      commit->author = ghost;
+  }
+}
+
+void delete_repository(Repository *repo) {
+  delete_history(repo->commits);
+  for (int i = 0; i < repo->numBranches; ++i) {
+    delete_history(repo->branches[i]->head);
+    delete repo->branches[i];
+  }
+  for (int i = 0; i < repo->numPrs; ++i)
+    delete repo->prs[i];
+  delete[] repo->branches;
+  delete[] repo->prs;
+  delete[] repo->forks;
+  delete repo;
+}
+
+} // namespace
+
+/** Task 8.1 - Merge Pull Request (Squash Merge) */
 void merge_pull_request_squashmerge(RepositoryManagement &repoManagement,
                                     char *repoFQN, int prNumber,
                                     time_t timestamp) {
-  // TODO: Task 8.1
-  Repository *targetrepo = nullptr;
-  for (int i=0; i<repoManagement.numRepos;i++){
-    Repository *currepo=repoManagement.repos[i];
-    char tempFQN[MAX_USER_NAME_LEN + MAX_REPO_NAME_LEN + 2];
-    strcpy(tempFQN, currepo->owner->name);
-    strcat(tempFQN, "/");
-    strcat(tempFQN, currepo->name);
-    if (strcmp(tempFQN,repoFQN)==0){
-      targetrepo=currepo;
-      break;
-    }
-  }
-  if (targetrepo==nullptr){
-    cout<<"Repository "<<repoFQN<<" does not exist."<<endl;
-    return;
-  }
-  if (prNumber>targetrepo->numPrs){
-    cout << "Invalid pull request number for repository " << repoFQN << ": out of range." << endl;
-    return;
-  }
-  PullRequest *pr = targetrepo->prs[prNumber - 1];
-  char commitMsg[MAX_COMMIT_MSG_LEN];
-  sprintf(commitMsg,"%s (#%d)",pr->title,prNumber);
-  Commit *newcommit=new Commit;
-  newcommit->author=pr->author;
-  newcommit->timestamp=timestamp;
-  strcpy(newcommit->message,commitMsg);
-  Commit *precommit= nullptr;
-  if (pr->toBranch==nullptr){
-    precommit=targetrepo->commits;
-  }
-  else{
-    precommit=pr->toBranch->head;
-  }
-  initialize(newcommit->hash);
-  input(newcommit->hash,newcommit->author->name,strlen(newcommit->author->name));
-  input(newcommit->hash,newcommit->message,strlen(newcommit->message));
-  input(newcommit->hash,newcommit->timestamp);
-  if (precommit!=nullptr){
-  input(newcommit->hash,precommit->author->name,strlen(precommit->author->name));
-  input(newcommit->hash,precommit->message,strlen(precommit->message));
-  input(newcommit->hash,precommit->timestamp);
-  }
-  digest(newcommit->hash);
-  if (precommit != nullptr) {
-     precommit->prev = newcommit;
-    }
-  newcommit->prev=nullptr;
-  newcommit->next=precommit;
-  if (pr->toBranch==nullptr){
-    targetrepo->commits=newcommit;
-  }
-  else{
-    pr->toBranch->head=newcommit;
-  }
-  if (pr->fromBranch!=nullptr){
-    Repository *fromRepo = pr->fromBranch->repo;
-    Commit *cur = pr->fromBranch->head;
-    while (cur!=nullptr){
-      bool isshared=false;
-      Commit *mc = fromRepo->commits; 
-      while(mc != nullptr){
-        if (cur == mc){
-          isshared = true;
-          break;
-        }
-        mc = mc->next; 
-      }
-      if (isshared==false){
-        for (int i=0; i<fromRepo->numBranches;i++){
-          Branch *b= fromRepo->branches[i];
-          if (pr->fromBranch==b){
-            continue;
-          }
-          Commit *bc= b->head;
-          while (bc!=nullptr){
-            if (bc==cur){
-              isshared=true;
-              break;
-            }
-            bc=bc->next;
-          }
-        }
-        if (isshared){
-          break;
-        }
-      }  
-      if (isshared){
-        break;
-      }
-      Commit *todelete=cur;
-      cur=cur->next;
-      if (cur!=nullptr){
-        cur->prev=nullptr;
-      }
-      delete todelete;
-    }
-    int bIdx = -1;
-    for (int i = 0; i < fromRepo->numBranches; i++) {
-      if (fromRepo->branches[i] == pr->fromBranch) {
-        bIdx = i;
-        break;
-      }
-    }
-    if (bIdx != -1) {
-      delete fromRepo->branches[bIdx];
-      for (int i = bIdx; i < fromRepo->numBranches - 1; i++) {
-        fromRepo->branches[i] = fromRepo->branches[i + 1];
-      }
-      fromRepo->numBranches--;
-      if (fromRepo->numBranches == 0) {
-        delete[] fromRepo->branches;
-        fromRepo->branches = nullptr;
-      } 
-      else {
-        Branch **newBranches = new Branch*[fromRepo->numBranches];
-          for (int i = 0; i < fromRepo->numBranches; i++) {
-            newBranches[i] = fromRepo->branches[i];
-          }
-          delete[] fromRepo->branches;
-          fromRepo->branches = newBranches;
-      }
-    }
-    pr->fromBranch = nullptr; 
-  }
-  pr->status = MERGED; 
-  cout << "Pull request #" << prNumber << " in " << repoFQN << " has been merged using squash merge." << endl;
+  merge_task_pull_request(repoManagement, repoFQN, prNumber, timestamp,
+                          SQUASH_AND_MERGE);
 }
 
-/**
- * Task 8.2 - Merge Pull Request (Rebase Merge)
- *
- * The `merge_pull_request_rebasemerge` function merges the specified
- * pull request in a repsitory using the rebase merge strategy
- * (rebases all commits in the pull request to the target branch).
- *
- * @param repoManagement: reference to the `RepositoryManagement` structure
- *                        containing the dynamic array of pointers to
- *                        repositories.
- * @param repoFQN: the name of the repository to merge a pull request for.
- * @param prNumber: the number of the pull request to merge.
- * @param timestamp: the timestamp when this pull request was merged.
- */
+/** Task 8.2 - Merge Pull Request (Rebase Merge) */
 void merge_pull_request_rebasemerge(RepositoryManagement &repoManagement,
                                     char *repoFQN, int prNumber,
                                     time_t timestamp) {
-  // TODO: Task 8.2
-  Repository *targetrepo = nullptr;
-  for (int i=0; i<repoManagement.numRepos;i++){
-    Repository *currepo=repoManagement.repos[i];
-    char tempFQN[MAX_USER_NAME_LEN + MAX_REPO_NAME_LEN + 2];
-    strcpy(tempFQN, currepo->owner->name);
-    strcat(tempFQN, "/");
-    strcat(tempFQN, currepo->name);
-    if (strcmp(tempFQN,repoFQN)==0){
-      targetrepo=currepo;
-      break;
-    }
-  }
-  if (targetrepo==nullptr){
-    cout<<"Repository "<<repoFQN<<" does not exist."<<endl;
-    return;
-  }
-  if (prNumber>targetrepo->numPrs){
-    cout << "Invalid pull request number for repository " << repoFQN << ": out of range." << endl;
-    return;
-  }
-  PullRequest *pr = targetrepo->prs[prNumber - 1];
-  Commit *targetHead = nullptr;
-    if (pr->toBranch != nullptr) {
-      targetHead = pr->toBranch->head;
-    } else {
-        targetHead = targetrepo->commits; 
-    }
-  int count = 0;
-    Commit *curr = pr->fromBranch->head;
-    while (curr != nullptr) {
-        bool isShared = false;
-        Commit *tc = targetHead;
-        while (tc != nullptr) {
-            // 通过比对时间戳和留言，来精准识别跨仓库的“相同历史”
-            if (tc->timestamp == curr->timestamp && strcmp(tc->message, curr->message) == 0) { 
-                isShared = true; 
-                break; 
-            }
-            tc = tc->next;
-        }
-        if (isShared) break; 
-        
-        count++;
-        curr = curr->next;
-    }
-
-    Commit **uniqueCommits = nullptr;
-    if (count > 0) {
-        uniqueCommits = new Commit*[count];
-        curr = pr->fromBranch->head;
-        for (int i = 0; i < count; i++) {
-            uniqueCommits[i] = curr;
-            curr = curr->next;
-        }
-    }
-
-    // ==========================================
-    // 阶段 4：倒序回放（Replay）并重新计算 Hash
-    // ==========================================
-    Commit *hook = targetHead; // 就像挂钩一样，用来逐个接驳新车厢
-    
-    // 倒着遍历数组：从最老的 (count - 1) 开始，一路挂到最新的 (0)
-    for (int i = count - 1; i >= 0; i--) {
-        Commit *oldC = uniqueCommits[i];
-        Commit *newC = new Commit;
-        
-        // 1. 拷贝原始属性，但替换为规定的 timestamp
-        newC->author = oldC->author;
-        strcpy(newC->message, oldC->message);
-        newC->timestamp = timestamp; 
-        
-        // 2. 挂载到链表上
-        newC->next = hook;
-        newC->prev = nullptr;
-        if (hook != nullptr) {
-            hook->prev = newC;
-        }
-        
-        // 3. 计算哈希 (利用自身的属性 + previous的属性)
-        initialize(newC->hash);
-        input(newC->hash, newC->author->name, strlen(newC->author->name));
-        input(newC->hash, newC->message, strlen(newC->message));
-        input(newC->hash, newC->timestamp);
-        
-        if (hook != nullptr) {
-            input(newC->hash, hook->author->name, strlen(hook->author->name));
-            input(newC->hash, hook->message, strlen(hook->message));
-            input(newC->hash, hook->timestamp);
-        }
-        digest(newC->hash);
-        
-        // 把挂钩前移到刚建好的节点上，准备挂下一个
-        hook = newC; 
-    }
-    
-    // 用完数组后记得释放内存
-    if (uniqueCommits != nullptr) {
-        delete[] uniqueCommits;
-    }
-
-    // 4. 更新目标分支的 Head 指针，指向我们刚挂完的最新节点
-    if (pr->toBranch != nullptr) {
-        pr->toBranch->head = hook;
-    } else {
-        targetrepo->commits = hook;
-    }
-
-    // ==========================================
-    // 阶段 5：安全销毁原分支及其独有 Commits (GC)
-    // ==========================================
-    // 这里使用了我们在 8.1 中打磨完美的终极安全销毁逻辑
-    if (pr->fromBranch != nullptr) {
-        Repository *fromRepo = pr->fromBranch->repo;
-        Commit *curGC = pr->fromBranch->head;
-        
-        while (curGC != nullptr) {
-            bool isShared = false;
-            // 检查是否在主分支
-            Commit *mc = fromRepo->commits;
-            while (mc != nullptr) {
-                if (curGC == mc) { isShared = true; break; }
-                mc = mc->next;
-            }
-            
-            // 检查是否在其他普通分支
-            if (!isShared) {
-                for (int i = 0; i < fromRepo->numBranches; i++) {
-                    Branch *b = fromRepo->branches[i];
-                    if (b == pr->fromBranch) continue;
-                    
-                    Commit *bc = b->head;
-                    while (bc != nullptr) {
-                        if (bc == curGC) { isShared = true; break; }
-                        bc = bc->next;
-                    }
-                    if (isShared) break;
-                }
-            }
-            
-            if (isShared) break; // 遇到公共财产，停止销毁！
-            
-            // 安全删除节点
-            Commit *toDelete = curGC;
-            curGC = curGC->next;
-            if (curGC != nullptr) curGC->prev = nullptr;
-            delete toDelete;
-        }
-
-        // ==========================================
-        // 阶段 6：从 Repository 移除 Branch 对象
-        // ==========================================
-        int bIdx = -1;
-        for (int i = 0; i < fromRepo->numBranches; i++) {
-            if (fromRepo->branches[i] == pr->fromBranch) {
-                bIdx = i;
-                break;
-            }
-        }
-        
-        if (bIdx != -1) {
-            delete fromRepo->branches[bIdx]; // 释放这个分支的结构体
-            
-            for (int i = bIdx; i < fromRepo->numBranches - 1; i++) {
-                fromRepo->branches[i] = fromRepo->branches[i + 1];
-            }
-            fromRepo->numBranches--;
-            
-            if (fromRepo->numBranches == 0) {
-                delete[] fromRepo->branches;
-                fromRepo->branches = nullptr;
-            } else {
-                Branch **newBranches = new Branch*[fromRepo->numBranches];
-                for (int i = 0; i < fromRepo->numBranches; i++) {
-                    newBranches[i] = fromRepo->branches[i];
-                }
-                delete[] fromRepo->branches;
-                fromRepo->branches = newBranches;
-            }
-        }
-        pr->fromBranch = nullptr; 
-    }
-
-    // ==========================================
-    // 阶段 7：更新状态并打印成功
-    // ==========================================
-    pr->status = MERGED; 
-
-    // 注意这里输出要求是 using rebase merge
-    cout << "Pull request #" << prNumber << " in " << repoFQN 
-         << " has been merged using rebase merge." << endl;
+  merge_task_pull_request(repoManagement, repoFQN, prNumber, timestamp, REBASE_MERGE);
 }
 
-/**
- * Task 8.3 - Merge Pull Request (Merge Commit)
- *
- * The `merge_pull_request_mergecommit` function merges the specified
- * pull request in a repsitory using the merge commit strategy
- * (adds all commits to the target branch preserving chronological order, with a
- * final merge commit added).
- *
- * This is slightly different from what actually happens when a merge commit
- * is used, but for simplicity's sake this is done instead.
- *
- * @param repoManagement: reference to the `RepositoryManagement` structure
- *                        containing the dynamic array of pointers to
- *                        repositories.
- * @param repoFQN: the name of the repository to merge a pull request for.
- * @param prNumber: the number of the pull request to merge.
- * @param timestamp: the timestamp when this pull request was merged.
- */
+/** Task 8.3 - Merge Pull Request (Merge Commit) */
 void merge_pull_request_mergecommit(RepositoryManagement &repoManagement,
                                     char *repoFQN, int prNumber,
                                     time_t timestamp) {
-  // TODO: Task 8.3
-  Repository *targetrepo = nullptr;
-  for (int i=0; i<repoManagement.numRepos;i++){
-    Repository *currepo=repoManagement.repos[i];
-    char tempFQN[MAX_USER_NAME_LEN + MAX_REPO_NAME_LEN + 2];
-    strcpy(tempFQN, currepo->owner->name);
-    strcat(tempFQN, "/");
-    strcat(tempFQN, currepo->name);
-    if (strcmp(tempFQN,repoFQN)==0){
-      targetrepo=currepo;
-      break;
-    }
-  }
-  if (targetrepo==nullptr){
-    cout<<"Repository "<<repoFQN<<" does not exist."<<endl;
-    return;
-  }
-  if (prNumber>targetrepo->numPrs){
-    cout << "Invalid pull request number for repository " << repoFQN << ": out of range." << endl;
-    return;
-  }
-  PullRequest *pr = targetrepo->prs[prNumber - 1];
-  // ==========================================
-    // 2. 确定目标分支当前最新的提交 (挂载点)
-    // ==========================================
-    Commit *targetHead = (pr->toBranch != nullptr) ? pr->toBranch->head : targetrepo->commits;
-
-    // ==========================================
-    // 3. 深拷贝源分支中的“独有提交”
-    // ==========================================
-    // 我们需要把 fromBranch 里的私有节点找出来，并倒序排列（因为链表头是最新的）
-    int count = 0;
-    Commit *curr = pr->fromBranch->head;
-    while (curr != nullptr) {
-        bool isShared = false;
-        Commit *tc = targetHead;
-        while (tc != nullptr) {
-            // 通过比对时间戳和留言，来精准识别跨仓库的“相同历史”
-            if (tc->timestamp == curr->timestamp && strcmp(tc->message, curr->message) == 0) { 
-                isShared = true; 
-                break; 
-            }
-            tc = tc->next;
-        }
-        if (isShared) break;
-        count++;
-        curr = curr->next;
-    }
-
-    // 依然采用“数组倒序回放法”，这样能保持时间顺序
-    Commit **uniqueCommits = (count > 0) ? new Commit*[count] : nullptr;
-    curr = pr->fromBranch->head;
-    for (int i = 0; i < count; i++) {
-        uniqueCommits[i] = curr;
-        curr = curr->next;
-    }
-
-    // 依次拷贝并链接
-    Commit *hook = targetHead;
-    for (int i = count - 1; i >= 0; i--) {
-        Commit *oldC = uniqueCommits[i];
-        Commit *newC = new Commit;
-        *newC = *oldC; // 复制所有内容 (含作者、信息、原始哈希、时间戳)
-        
-        // 重新构建链表关系
-        newC->next = hook;
-        newC->prev = nullptr;
-        if (hook != nullptr) hook->prev = newC;
-        
-        hook = newC; // 挂钩前移
-    }
-    if (uniqueCommits) delete[] uniqueCommits;
-
-    // ==========================================
-    // 4. 创建最后的 Merge Commit (合并节点)
-    // ==========================================
-    Commit *finalMergeCommit = new Commit;
-    finalMergeCommit->author = pr->author;
-    finalMergeCommit->timestamp = timestamp;
-    
-    // 生成格式：Merge pull request #<number> from branch <branch>
-    // 注意：这里的 <branch> 是 fromBranchFQN
-    char mergeMsg[256];
-    char fromFQN[256];
-    // 按照 <Owner>/<Repo>:<Branch> 的格式拼装出 FQN
-    sprintf(fromFQN, "%s/%s:%s", pr->fromBranch->repo->owner->name, 
-                               pr->fromBranch->repo->name, 
-                               pr->fromBranch->name);
-    sprintf(mergeMsg, "Merge pull request #%d from branch %s", prNumber, fromFQN);
-    strcpy(finalMergeCommit->message, mergeMsg);
-    // 链接到刚才生成的链表最顶端
-    finalMergeCommit->next = hook;
-    finalMergeCommit->prev = nullptr;
-    if (hook != nullptr) hook->prev = finalMergeCommit;
-
-    // 计算合并提交的哈希值
-    initialize(finalMergeCommit->hash);
-    input(finalMergeCommit->hash, finalMergeCommit->author->name, strlen(finalMergeCommit->author->name));
-    input(finalMergeCommit->hash, finalMergeCommit->message, strlen(finalMergeCommit->message));
-    input(finalMergeCommit->hash, finalMergeCommit->timestamp);
-    if (hook != nullptr) {
-        input(finalMergeCommit->hash, hook->author->name, strlen(hook->author->name));
-        input(finalMergeCommit->hash, hook->message, strlen(hook->message));
-        input(finalMergeCommit->hash, hook->timestamp);
-    }
-    digest(finalMergeCommit->hash);
-
-    // 更新目标分支的 Head
-    if (pr->toBranch != nullptr) pr->toBranch->head = finalMergeCommit;
-    else targetrepo->commits = finalMergeCommit;
-
-    // ==========================================
-    // 5. 垃圾回收：销毁源分支 (与 8.1 逻辑一致)
-    // ==========================================
-    if (pr->fromBranch != nullptr) {
-        Repository *fromRepo = pr->fromBranch->repo;
-        Commit *gcCurr = pr->fromBranch->head;
-        while (gcCurr != nullptr) {
-            bool isShared = false;
-            Commit *mc = fromRepo->commits;
-            while (mc != nullptr) {
-                if (gcCurr == mc) { isShared = true; break; }
-                mc = mc->next;
-            }
-            if (!isShared) {
-                for (int i = 0; i < fromRepo->numBranches; i++) {
-                    if (fromRepo->branches[i] == pr->fromBranch) continue;
-                    Commit *bc = fromRepo->branches[i]->head;
-                    while (bc != nullptr) {
-                        if (gcCurr == bc) { isShared = true; break; }
-                        bc = bc->next;
-                    }
-                    if (isShared) break;
-                }
-            }
-            if (isShared) break;
-            Commit *toDel = gcCurr;
-            gcCurr = gcCurr->next;
-            if (gcCurr) gcCurr->prev = nullptr;
-            delete toDel;
-        }
-
-        // 从数组中删除 Branch 对象
-        int bIdx = -1;
-        for (int i = 0; i < fromRepo->numBranches; i++) {
-            if (fromRepo->branches[i] == pr->fromBranch) { bIdx = i; break; }
-        }
-        if (bIdx != -1) {
-            delete fromRepo->branches[bIdx];
-            for (int i = bIdx; i < fromRepo->numBranches - 1; i++) fromRepo->branches[i] = fromRepo->branches[i+1];
-            fromRepo->numBranches--;
-            // 此处可选择缩容，逻辑同 8.1
-        }
-        pr->fromBranch = nullptr;
-    }
-
-    // ==========================================
-    // 6. 更新状态与输出
-    // ==========================================
-    pr->status = MERGED;
-    cout << "Pull request #" << prNumber << " in " << repoFQN 
-         << " has been merged using a merge commit." << endl;
+  merge_task_pull_request(repoManagement, repoFQN, prNumber, timestamp, MERGE_COMMIT);
 }
 
 /**
  * Task 9 - De-register User
  *
- * The `deregister_user` function de-registers a user from the version control
- * system and updates any references to it with the ghost user. This deletes all
- * their repositories and then deallocates memory allocated to this user.
- *
- * @param userManagement: reference to the `UserManagement` structure containing
- *                        the linked list of users.
- * @param repoManagement: reference to the `RepositoryManagement` structure
- *                        containing the dynamic array of pointers to
- *                        repositopries.
- * @param username: the name of the user to de-register.
+ * Reassign the user's contributions to ghost and delete owned repositories.
  */
 void deregister_user(UserManagement &userManagement,
                      RepositoryManagement &repoManagement,
                      const char *username) {
-  // TODO: Task 9
-  // 1. 查找目标用户和 Ghost 用户
-    User *targetUser = nullptr;
-    User *ghostUser = nullptr;
-    User *prevUser = nullptr; // 用于链表删除
-    User *curr = userManagement.head;
-    User *tempPrev = nullptr;
+  User **link = &userManagement.head;
+  while (*link && strcmp((*link)->name, username) != 0)
+    link = &(*link)->next;
+  if (!*link) {
+    cout << "User " << username << " does not exist." << endl;
+    return;
+  }
 
-    while (curr != nullptr) {
-        if (strcmp(curr->name, username) == 0) {
-            targetUser = curr;
-            prevUser = tempPrev;
-        }
-        if (strcmp(curr->name, "ghost") == 0) {
-            ghostUser = curr;
-        }
-        tempPrev = curr;
-        curr = curr->next;
+  User *user = *link;
+  int kept = 0;
+  for (int i = 0; i < repoManagement.numRepos; ++i) {
+    Repository *repo = repoManagement.repos[i];
+    if (repo->owner == user)
+      continue;
+    repoManagement.repos[kept++] = repo;
+
+    replace_author(repo->commits, user);
+    for (int j = 0; j < repo->numBranches; ++j) {
+      Branch &branch = *repo->branches[j];
+      if (branch.creator == user)
+        branch.creator = ghost;
+      replace_author(branch.head, user);
     }
 
-    if (targetUser == nullptr) {
-        cout << "User " << username << " does not exist." << endl;
-        return;
-    }
-    if (ghostUser == nullptr) {
-        ghostUser = new User;
-        strcpy(ghostUser->name, "ghost");
-        ghostUser->numRepos = 0;
-        ghostUser->repos = nullptr;
-        ghostUser->next = userManagement.head;
-        userManagement.head = ghostUser;
+    for (int j = 0; j < repo->numPrs; ++j) {
+      PullRequest &pr = *repo->prs[j];
+      if (pr.author == user)
+        pr.author = ghost;
+      if (pr.fromRepo && pr.fromRepo->owner == user) {
+        pr.fromRepo = nullptr;
+        pr.fromBranch = nullptr;
+        close_if_open(pr);
+      }
     }
 
-    // 2. 全局遗迹移交 (Commits, PRs, Branches)
-    // 即使该用户要走了，他留下的代码和记录也要改名为 "ghost" 继续存在
-    for (int i = 0; i < repoManagement.numRepos; i++) {
-        Repository *repo = repoManagement.repos[i];
-
-        // 处理 Commits 链表
-        Commit *c = repo->commits;
-        while (c != nullptr) {
-            if (c->author == targetUser) c->author = ghostUser;
-            c = c->next;
-        }
-
-        // 处理 Pull Requests
-        for (int j = 0; j < repo->numBranches; j++) {
-            Commit *bc = repo->branches[j]->head;
-            while (bc != nullptr) {
-                if (bc->author == targetUser) bc->author = ghostUser;
-                bc = bc->next;
-            }
-            if (repo->branches[j]->creator == targetUser) repo->branches[j]->creator = ghostUser;
-        }
-
-        // 处理 Branches
-        for (int j = 0; j < repo->numBranches; j++) {
-            if (repo->branches[j]->creator == targetUser) repo->branches[j]->creator = ghostUser;
-        }
+    int keptForks = 0;
+    for (int j = 0; j < repo->numForks; ++j) {
+      if (repo->forks[j]->owner != user)
+        repo->forks[keptForks++] = repo->forks[j];
     }
+    repo->numForks = keptForks;
+  }
+  repoManagement.numRepos = kept;
 
-    // 3. 销毁用户拥有的所有仓库
-    // 注意：我们要从后往前删，或者先记录指针，避免数组位移导致的索引混乱
-    for (int i = 0; i < targetUser->numRepos; i++) {
-        Repository *repoToDelete = targetUser->repos[i];
-
-        // A. 从全局 repoManagement 中移除
-        int globalIdx = -1;
-        for (int j = 0; j < repoManagement.numRepos; j++) {
-            if (repoManagement.repos[j] == repoToDelete) {
-                globalIdx = j;
-                break;
-            }
-        }
-        if (globalIdx != -1) {
-            for (int j = globalIdx; j < repoManagement.numRepos - 1; j++) {
-                repoManagement.repos[j] = repoManagement.repos[j+1];
-            }
-            repoManagement.numRepos--;
-        }
-        // 新增：从其他仓库的 Forks 数组中清除僵尸指针！
-        for (int r = 0; r < repoManagement.numRepos; r++) {
-            Repository *otherRepo = repoManagement.repos[r];
-            int fIdx = -1;
-            for (int f = 0; f < otherRepo->numForks; f++) {
-                if (otherRepo->forks[f] == repoToDelete) { fIdx = f; break; }
-            }
-            if (fIdx != -1) {
-                for (int f = fIdx; f < otherRepo->numForks - 1; f++) otherRepo->forks[f] = otherRepo->forks[f+1];
-                otherRepo->numForks--;
-            }
-        }
-
-        // B. 释放仓库深层内存 (由于 Task 1-8 可能已经实现了部分清理，这里需彻底)
-        // 释放 Commits
-        Commit *c = repoToDelete->commits;
-        while (c != nullptr) {
-            Commit *nextC = c->next;
-            delete c;
-            c = nextC;
-        }
-        // 释放 Branches
-        for (int j = 0; j < repoToDelete->numBranches; j++) delete repoToDelete->branches[j];
-        delete[] repoToDelete->branches;
-        // 释放 PRs
-        for (int j = 0; j < repoToDelete->numPrs; j++) delete repoToDelete->prs[j];
-        delete[] repoToDelete->prs;
-        // 释放 Forks 数组 (指针指向的 repo 会在它们各自 owner 注销时处理)
-        delete[] repoToDelete->forks;
-
-        delete repoToDelete;
-    }
-    delete[] targetUser->repos;
-
-    // 4. 从 UserManagement 链表中移除用户
-    if (prevUser == nullptr) {
-        userManagement.head = targetUser->next;
-    } else {
-        prevUser->next = targetUser->next;
-    }
-    
-    delete targetUser;
-
-    cout << "User " << username << " has been deregistered." << endl;
+  const string removedName(username);
+  for (int i = 0; i < user->numRepos; ++i)
+    delete_repository(user->repos[i]);
+  delete[] user->repos;
+  *link = user->next;
+  delete user;
+  cout << "User " << removedName << " has been deregistered." << endl;
 }

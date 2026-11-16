@@ -18,9 +18,9 @@ UserManagement userManagement;
 time_t make_time_from_string(const char *str) {
   istringstream ss(str);
 
-  tm buf;
-  ss >> get_time(&buf, "%Y-%M-%DT%TZ");
-  if (ss.fail()) {
+  tm buf{};
+  ss >> get_time(&buf, "%Y-%m-%dT%H:%M:%SZ");
+  if (ss.fail() || ss.peek() != char_traits<char>::eof()) {
     cout << "Invalid timestamp, expected RFC3339 format "
             "(YYYY-MM-DDTHH:MM:SSZ)."
          << endl;
@@ -393,6 +393,7 @@ multimap<string, command_t> commands = {
 
         if (!strcmp(branch, "main")) {
           Branch *main = new Branch;
+          strcpy(main->name, "main");
           main->creator = ptr->owner;
           main->head = ptr->commits;
           main->repo = ptr;
