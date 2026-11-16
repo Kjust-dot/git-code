@@ -16,7 +16,7 @@ You need Git to clone the repository, Make to build it, and a compiler that supp
 
 ```sh
 git clone https://github.com/Kjust-dot/git-code.git
-cd git-code/mini-git
+cd git-code
 make
 ./main
 ```
@@ -57,8 +57,8 @@ Use `owner/repository` to identify a repository and `owner/repository:branch` to
 
 | File | Responsibility |
 | --- | --- |
-| [`main.cpp`](mini-git/main.cpp) | Runs the interactive shell and dispatches commands. |
-| [`commands.cpp`](mini-git/commands.cpp) | Parses command arguments and calls the version control implementation. |
-| [`version_control.cpp`](mini-git/version_control.cpp) | Implements user, repository, branch, commit, fork, and pull request operations. |
-| [`structures.h`](mini-git/structures.h) | Defines the in-memory data structures for users, repositories, branches, commits, and pull requests. |
-| [`sha1.cpp`](mini-git/sha1.cpp) | Implements SHA-1 hashing for commit identifiers. |
+| [`main.cpp`](main.cpp) | Runs the interactive shell and dispatches commands. |
+| [`commands.cpp`](commands.cpp) | Parses command arguments and calls the version control implementation. |
+| [`version_control.cpp`](version_control.cpp) | Implements user, repository, branch, commit, fork, and pull request operations. |
+| [`structures.h`](structures.h) | Defines the in-memory data structures for users, repositories, branches, commits, and pull requests. |
+| [`sha1.cpp`](sha1.cpp) | Implements SHA-1 hashing for commit identifiers. |
