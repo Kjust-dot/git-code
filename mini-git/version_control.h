@@ -1,5 +1,5 @@
-#ifndef __PA3_TASK_H__
-#define __PA3_TASK_H__
+#ifndef VERSION_CONTROL_H
+#define VERSION_CONTROL_H
 
 #include "structures.h"
 
@@ -49,4 +49,4 @@ void deregister_user(UserManagement &userManagement,
                      RepositoryManagement &repoManagement,
                      const char *username);
 
-#endif /* __PA3_TASK_H__ */
+#endif /* VERSION_CONTROL_H */
